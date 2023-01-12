@@ -21,13 +21,14 @@ import numpy as np
 import math
 from utils.architectures import Generator, Discriminator
 from utils.helper import weights_init, pate, moments_acc
+import pandas as pd
 
 
 class PATE_GAN:
-    def __init__(self, input_dim, z_dim, num_teachers, target_epsilon, target_delta, conditional=True):
-        self.generator = Generator(z_dim, input_dim, conditional).cuda().double()
-        self.student_disc = Discriminator(input_dim, wasserstein=False).cuda().double()
-        self.teacher_disc = [Discriminator(input_dim, wasserstein=False).cuda().double()
+    def __init__(self, input_dim, z_dim, num_teachers, target_epsilon, target_delta,max_epochs, folder_name='heart', conditional=True):
+        self.generator = Generator(z_dim, input_dim, conditional).double()
+        self.student_disc = Discriminator(input_dim, wasserstein=False).double()
+        self.teacher_disc = [Discriminator(input_dim, wasserstein=False).double()
                              for _ in range(num_teachers)]
         self.generator.apply(weights_init)
         self.student_disc.apply(weights_init)
@@ -39,7 +40,8 @@ class PATE_GAN:
         self.target_epsilon = target_epsilon
         self.target_delta = target_delta
         self.conditional = conditional
-
+        self.max_epochs = max_epochs
+        self.folder_name = folder_name
     def train(self, x_train, y_train, hyperparams):
         batch_size = hyperparams.batch_size
         num_teacher_iters = hyperparams.num_teacher_iters
@@ -47,14 +49,15 @@ class PATE_GAN:
         num_moments = hyperparams.num_moments
         lap_scale = hyperparams.lap_scale
         class_ratios = None
+        class_ratios_orig = hyperparams.class_ratios
         if self.conditional:
             class_ratios = torch.from_numpy(hyperparams.class_ratios)
 
         real_label = 1
         fake_label = 0
 
-        alpha = torch.cuda.DoubleTensor([0.0 for _ in range(num_moments)])
-        l_list = 1 + torch.cuda.DoubleTensor(range(num_moments))
+        alpha = torch.DoubleTensor([0.0 for _ in range(num_moments)])
+        l_list = 1 + torch.DoubleTensor(range(num_moments))
 
         criterion = nn.BCELoss()
         optimizer_g = optim.Adam(self.generator.parameters(), lr=hyperparams.lr)
@@ -62,7 +65,7 @@ class PATE_GAN:
         optimizer_td = [optim.Adam(self.teacher_disc[i].parameters(), lr=hyperparams.lr
                                    ) for i in range(self.num_teachers)]
 
-        tensor_data = data_utils.TensorDataset(torch.cuda.DoubleTensor(x_train), torch.cuda.DoubleTensor(y_train))
+        tensor_data = data_utils.TensorDataset(torch.DoubleTensor(x_train), torch.DoubleTensor(y_train))
 
         train_loader = []
         for teacher_id in range(self.num_teachers):
@@ -75,30 +78,36 @@ class PATE_GAN:
 
         steps = 0
         epsilon = 0
-
-        while epsilon < self.target_epsilon:
-
+        i = 0
+        #while epsilon < self.target_epsilon: #changing to a specific interval
+        while steps < self.max_epochs:
             # train the teacher discriminators
             for t_2 in range(num_teacher_iters):
                 for i in range(self.num_teachers):
                     inputs, categories = None, None
                     for b, data in enumerate(train_loader[i], 0):
                         inputs, categories = data
+                        #print("In loop", inputs, categories)
                         break
 
                     # train with real
                     optimizer_td[i].zero_grad()
-                    label = torch.full((inputs.size()[0],), real_label).cuda()
+                    #print("input size is", real_label)
+                    label = torch.full((inputs.size()[0],), real_label,dtype=torch.long)
                     output = self.teacher_disc[i].forward(torch.cat([inputs, categories.unsqueeze(1).double()], dim=1))
                     err_d_real = criterion(output, label.double())
                     err_d_real.backward()
 
                     # train with fake
-                    z = torch.Tensor(batch_size, self.z_dim).uniform_(0, 1).cuda()
+                    z = torch.Tensor(batch_size, self.z_dim).uniform_(0, 1)
                     label.fill_(fake_label)
 
                     if self.conditional:
-                        category = torch.multinomial(class_ratios,  inputs.size()[0], replacement=True).unsqueeze(1).cuda().double()
+                        #print("class ratios are",inputs.size()[0], inputs.size())
+                        category = torch.multinomial(class_ratios,  inputs.size()[0], replacement=True).unsqueeze(1).double()
+                        #print("Sizes are")
+                        print(category.size())
+                        print(z.double().size())
                         fake = self.generator(torch.cat([z.double(), category], dim=1))
                         output = self.teacher_disc[i].forward(torch.cat([fake.detach(), category], dim=1))
                     else:
@@ -111,10 +120,10 @@ class PATE_GAN:
 
             # train the student discriminator
             for t_3 in range(num_student_iters):
-                z = torch.Tensor(batch_size, self.z_dim).uniform_(0, 1).cuda()
+                z = torch.Tensor(batch_size, self.z_dim).uniform_(0, 1)
 
                 if self.conditional:
-                    category = torch.multinomial(class_ratios,  inputs.size()[0], replacement=True).unsqueeze(1).cuda().double()
+                    category = torch.multinomial(class_ratios,  inputs.size()[0], replacement=True).unsqueeze(1).double()
                     fake = self.generator(torch.cat([z.double(), category], dim=1))
                     predictions, clean_votes = pate(torch.cat(
                         [fake.detach(), category], dim=1), self.teacher_disc, lap_scale)
@@ -137,11 +146,11 @@ class PATE_GAN:
 
             # train the generator
             optimizer_g.zero_grad()
-            z = torch.Tensor(batch_size, self.z_dim).uniform_(0, 1).cuda()
-            label = torch.full((inputs.size()[0],), real_label).cuda()
+            z = torch.Tensor(batch_size, self.z_dim).uniform_(0, 1)
+            label = torch.full((inputs.size()[0],), real_label,dtype=torch.long)
 
             if self.conditional:
-                category = torch.multinomial(class_ratios,  inputs.size()[0], replacement=True).unsqueeze(1).cuda().double()
+                category = torch.multinomial(class_ratios,  inputs.size()[0], replacement=True).unsqueeze(1).double()
                 fake = self.generator(torch.cat([z.double(), category], dim=1))
                 output = self.student_disc(torch.cat([fake, category.double()], dim=1))
             else:
@@ -154,9 +163,13 @@ class PATE_GAN:
 
             # Calculate the current privacy cost
             epsilon = min((alpha - math.log(self.target_delta)) / l_list)
-            if steps % 100 == 0:
+            if steps % 500 == 0:
                 print("Step : ", steps, "Loss SD : ", err_sd.item(), "Loss G : ", err_g.item(), "Epsilon : ",
                       epsilon.item())
+                generated_data = self.generate(1000, class_ratios_orig)
+                string = "./saved_runs/"+self.folder_name+"/PATE_GAN_saved_data_run_" + str(steps) + "_epochs.csv"
+                pd.DataFrame(generated_data).to_csv(string)
+                print(fake.shape)
 
             steps += 1
 
@@ -166,9 +179,9 @@ class PATE_GAN:
         if self.conditional:
             class_ratios = torch.from_numpy(class_ratios)
         for step in range(steps):
-            noise = torch.randn(batch_size, self.z_dim).cuda()
+            noise = torch.randn(batch_size, self.z_dim)
             if self.conditional:
-                cat = torch.multinomial(class_ratios, batch_size, replacement=True).unsqueeze(1).cuda().double()
+                cat = torch.multinomial(class_ratios, batch_size, replacement=True).unsqueeze(1).double()
                 synthetic = self.generator(torch.cat([noise.double(), cat], dim=1))
                 synthetic = torch.cat([synthetic, cat], dim=1)
 
@@ -178,11 +191,11 @@ class PATE_GAN:
             synthetic_data.append(synthetic.cpu().data.numpy())
 
         if steps * batch_size < num_rows:
-            noise = torch.randn(num_rows - steps * batch_size, self.z_dim).cuda()
+            noise = torch.randn(num_rows - steps * batch_size, self.z_dim)
 
             if self.conditional:
                 cat = torch.multinomial(class_ratios, num_rows - steps * batch_size, replacement=True).unsqueeze(
-                    1).cuda().double()
+                    1).double()
                 synthetic = self.generator(torch.cat([noise.double(), cat], dim=1))
                 synthetic = torch.cat([synthetic, cat], dim=1)
             else:
@@ -190,3 +203,4 @@ class PATE_GAN:
             synthetic_data.append(synthetic.cpu().data.numpy())
 
         return np.concatenate(synthetic_data)
+    

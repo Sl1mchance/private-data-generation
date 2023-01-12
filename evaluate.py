@@ -127,6 +127,7 @@ if opt.normalize_data:
     X_test = expit(X_test)
 
 input_dim = X_train.shape[1]
+
 z_dim = int(input_dim / 4 + 1) if input_dim % 4 == 0 else int(input_dim / 4)
 
 conditional = (opt.downstream_task == "classification")

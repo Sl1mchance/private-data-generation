@@ -34,10 +34,10 @@ def pate(data, netTD, lap_scale):
         pred = (output > 0.5).type(torch.Tensor).squeeze()
         results[i] = pred
 
-    clean_votes = torch.sum(results, dim=0).unsqueeze(1).type(torch.cuda.DoubleTensor)
-    noise = torch.from_numpy(np.random.laplace(loc=0, scale=1/lap_scale, size=clean_votes.size())).cuda()
+    clean_votes = torch.sum(results, dim=0).unsqueeze(1).type(torch.DoubleTensor)
+    noise = torch.from_numpy(np.random.laplace(loc=0, scale=1/lap_scale, size=clean_votes.size()))
     noisy_results = clean_votes + noise
-    noisy_labels = (noisy_results > len(netTD)/2).type(torch.cuda.DoubleTensor)
+    noisy_labels = (noisy_results > len(netTD)/2).type(torch.DoubleTensor)
 
     return noisy_labels, clean_votes
 
@@ -54,7 +54,7 @@ def moments_acc(num_teachers, clean_votes, lap_scale, l_list):
         t = t_one + t_two
         update.append(torch.clamp(t, max=a).sum())
 
-    return torch.cuda.DoubleTensor(update)
+    return torch.DoubleTensor(update)
 
 
 def mutual_information(labels_x: pd.Series, labels_y: pd.DataFrame):
